@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oliveboard — RBI LPT Examiner</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Sora:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --ob-cyan: #29C4E6;
+            --ob-sky: #4DD8F5;
+            --ob-deep: #0A9EBF;
+            --ob-dark: #0D1B2A;
+            --ob-text: #E8F4FA;
+            --ob-muted: #7EA9C2;
+            --ob-white: #FFFFFF;
+            --ob-pass: #22D07A;
+            --ob-fail: #F25C5C;
+            --ob-warn: #F9A825;
+            --ob-glass: rgba(255,255,255,0.06);
+            --ob-glass-border: rgba(41,196,230,0.25);
+            --radius: 18px;
+            --radius-sm: 10px;
+            --shadow: 0 20px 60px rgba(0,0,0,0.4);
+            --glow: 0 0 30px rgba(41,196,230,0.3);
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--ob-dark);
+            color: var(--ob-text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── ANIMATED BACKGROUND ── */
+        .bg-canvas {
+            position: fixed; inset: 0; z-index: 0; overflow: hidden;
+            background: radial-gradient(ellipse at 15% 15%, #0D2E45 0%, var(--ob-dark) 55%),
+                        radial-gradient(ellipse at 85% 85%, #081E2F 0%, transparent 50%);
+        }
+        .bg-orb {
+            position: absolute; border-radius: 50%;
+            filter: blur(90px); opacity: 0.16;
+            animation: orbFloat 14s ease-in-out infinite;
+        }
+        .bg-orb-1 { width: 560px; height: 560px; background: var(--ob-cyan); top: -160px; left: -140px; animation-delay: 0s; }
+        .bg-orb-2 { width: 420px; height: 420px; background: var(--ob-deep); bottom: -100px; right: -100px; animation-delay: -5s; }
+        .bg-orb-3 { width: 280px; height: 280px; background: #0A6A8A; top: 45%; left: 55%; animation-delay: -9s; }
+        .grid-overlay {
+            position: absolute; inset: 0;
+            background-image: linear-gradient(rgba(41,196,230,0.035) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(41,196,230,0.035) 1px, transparent 1px);
+            background-size: 56px 56px;
+        }
+        @keyframes orbFloat {
+            0%,100% { transform: translate(0,0) scale(1); }
+            33%  { transform: translate(28px,-36px) scale(1.06); }
+            66%  { transform: translate(-18px,22px) scale(0.94); }
+        }
+
+        /* ── WRAPPER ── */
+        .app-wrapper {
+            position: relative; z-index: 1;
+            max-width: 820px; margin: 0 auto;
+            padding: 32px 20px 80px;
+            min-height: 100vh;
+        }
+
+        /* ── HEADER ── */
+        .header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 44px; padding-bottom: 22px;
+            border-bottom: 1px solid rgba(41,196,230,0.14);
+        }
+        .logo-group { display: flex; align-items: center; gap: 14px; }
+        .logo-mark {
+            width: 48px; height: 48px; border-radius: 13px;
+            background: linear-gradient(135deg, var(--ob-cyan), var(--ob-deep));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 23px; box-shadow: 0 4px 22px rgba(41,196,230,0.45);
+            flex-shrink: 0;
+        }
+        .logo-text .brand {
+            font-family: 'Sora', sans-serif; font-size: 19px;
+            font-weight: 700; color: var(--ob-white); line-height: 1.2;
+        }
+        .logo-text .brand span { color: var(--ob-cyan); }
+        .logo-text .tagline {
+            font-size: 11px; color: var(--ob-muted);
+            font-weight: 500; letter-spacing: 0.09em; text-transform: uppercase;
+        }
+        .header-badge {
+            background: rgba(41,196,230,0.11);
+            border: 1px solid rgba(41,196,230,0.28);
+            color: var(--ob-cyan); font-size: 11px; font-weight: 600;
+            padding: 5px 13px; border-radius: 30px; letter-spacing: 0.06em;
+            white-space: nowrap;
+        }
+
+        /* ── STEP TRANSITIONS ── */
+        .container { display: none; animation: stepIn 0.48s cubic-bezier(.34,1.56,.64,1) both; }
+        .active { display: block; }
+        @keyframes stepIn {
+            from { opacity:0; transform:translateY(22px) scale(0.985); }
+            to   { opacity:1; transform:translateY(0)    scale(1);     }
+        }
+
+        /* ── HERO (mode screen) ── */
+        .page-hero { text-align: center; margin-bottom: 38px; animation: heroIn 0.65s ease both; }
+        .page-hero .eyebrow {
+            font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.16em;
+            color: var(--ob-cyan); font-weight: 600; margin-bottom: 10px;
+        }
+        .page-hero h1 {
+            font-family: 'Sora', sans-serif;
+            font-size: clamp(26px, 5vw, 38px);
+            font-weight: 700; line-height: 1.2; color: var(--ob-white); margin-bottom: 12px;
+        }
+        .page-hero h1 em { font-style: normal; color: var(--ob-cyan); }
+        .page-hero .subtitle {
+            font-size: 15px; color: var(--ob-muted);
+            max-width: 460px; margin: 0 auto; line-height: 1.65;
+        }
+        @keyframes heroIn {
+            from { opacity:0; transform:translateY(-16px); }
+            to   { opacity:1; transform:translateY(0); }
+        }
+
+        /* ── GLASS CARD ── */
+        .card {
+            background: var(--ob-glass);
+            border: 1px solid var(--ob-glass-border);
+            border-radius: var(--radius);
+            padding: 34px; backdrop-filter: blur(22px);
+            box-shadow: var(--shadow); position: relative; overflow: hidden;
+            margin-bottom: 20px;
+        }
+        .card::before {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(135deg, rgba(41,196,230,0.055) 0%, transparent 55%);
+            pointer-events: none;
+        }
+        .card h2 {
+            font-family: 'Sora', sans-serif; font-size: 21px;
+            font-weight: 700; color: var(--ob-white); margin-bottom: 7px;
+        }
+        .card > p, .card .sub-p {
+            font-size: 14px; color: var(--ob-muted); line-height: 1.65; margin-bottom: 20px;
+        }
+
+        /* ── MODE CARDS ── */
+        .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        @media(max-width:520px){ .mode-grid { grid-template-columns: 1fr; } }
+
+        .mode-card {
+            cursor: pointer;
+            background: var(--ob-glass);
+            border: 2px solid rgba(41,196,230,0.13);
+            border-radius: var(--radius); padding: 32px 22px;
+            text-align: center;
+            transition: all 0.36s cubic-bezier(.34,1.56,.64,1);
+            position: relative; overflow: hidden;
+        }
+        .mode-card::after {
+            content: ''; position: absolute; inset: 0;
+            background: radial-gradient(circle at 50% 50%, rgba(41,196,230,0.11) 0%, transparent 70%);
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .mode-card:hover { border-color: var(--ob-cyan); transform: translateY(-6px); box-shadow: var(--glow), var(--shadow); }
+        .mode-card:hover::after { opacity: 1; }
+        .mode-card:active { transform: translateY(-2px) scale(0.99); }
+
+        .mode-icon-wrap {
+            width: 70px; height: 70px; border-radius: 19px;
+            margin: 0 auto 16px;
+            display: flex; align-items: center; justify-content: center; font-size: 32px;
+        }
+        .mode-reading .mode-icon-wrap {
+            background: linear-gradient(135deg, rgba(41,196,230,0.28), rgba(41,196,230,0.08));
+            border: 1px solid rgba(41,196,230,0.38);
+        }
+        .mode-writing .mode-icon-wrap {
+            background: linear-gradient(135deg, rgba(34,208,122,0.28), rgba(34,208,122,0.08));
+            border: 1px solid rgba(34,208,122,0.38);
+        }
+        .mode-title { font-family: 'Sora', sans-serif; font-size: 19px; font-weight: 700; color: var(--ob-white); margin-bottom: 8px; }
+        .mode-desc  { font-size: 13px; color: var(--ob-muted); line-height: 1.6; }
+        .mode-arrow {
+            display: inline-flex; align-items: center; gap: 5px;
+            margin-top: 15px; font-size: 13px; font-weight: 600; color: var(--ob-cyan);
+            opacity: 0; transform: translateX(-5px); transition: all 0.28s;
+        }
+        .mode-card:hover .mode-arrow { opacity: 1; transform: translateX(0); }
+
+        /* ── PROGRESS STRIP ── */
+        .progress-strip {
+            display: flex; align-items: center;
+            margin-bottom: 28px; padding: 12px 18px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 50px; border: 1px solid rgba(41,196,230,0.11);
+        }
+        .prog-step {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 12.5px; font-weight: 500; color: var(--ob-muted); flex: 1;
+        }
+        .prog-step.done   { color: var(--ob-pass); }
+        .prog-step.active { color: var(--ob-cyan); }
+        .prog-dot {
+            width: 27px; height: 27px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11.5px; font-weight: 700; flex-shrink: 0;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+        }
+        .prog-step.done  .prog-dot { background: rgba(34,208,122,0.18); border-color: var(--ob-pass); color: var(--ob-pass); }
+        .prog-step.active .prog-dot { background: rgba(41,196,230,0.18); border-color: var(--ob-cyan); color: var(--ob-cyan); }
+        .prog-line { flex: 1; height: 1px; background: rgba(255,255,255,0.07); }
+        .prog-line.done  { background: rgba(34,208,122,0.38); }
+
+        /* ── BACK NAV ── */
+        .back-nav {
+            display: inline-flex; align-items: center; gap: 7px;
+            color: var(--ob-cyan); font-size: 13.5px; font-weight: 500;
+            cursor: pointer; margin-bottom: 22px; padding: 7px 13px;
+            border-radius: 8px; border: 1px solid rgba(41,196,230,0.18);
+            background: rgba(41,196,230,0.055); transition: all 0.24s;
+        }
+        .back-nav:hover { background: rgba(41,196,230,0.11); transform: translateX(-2px); }
+
+        /* ── SELECT ── */
+        .select-wrap { position: relative; }
+        select {
+            width: 100%; padding: 14px 42px 14px 17px;
+            font-size: 15px; font-family: 'Plus Jakarta Sans', sans-serif;
+            background: rgba(255,255,255,0.07); color: var(--ob-white);
+            border: 2px solid rgba(41,196,230,0.24);
+            border-radius: var(--radius-sm); appearance: none;
+            cursor: pointer; transition: all 0.24s; outline: none;
+        }
+        select:focus { border-color: var(--ob-cyan); box-shadow: 0 0 0 3px rgba(41,196,230,0.18); }
+        select option { background: #0D2E45; color: var(--ob-white); }
+        .select-arrow {
+            position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+            color: var(--ob-cyan); pointer-events: none; font-size: 17px;
+        }
+
+        /* ── PASSAGE TEXTAREA ── */
+        .passage-box {
+            width: 100%; background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(41,196,230,0.2);
+            border-radius: var(--radius-sm); padding: 18px;
+            font-size: 17px; line-height: 1.8; color: var(--ob-text);
+            font-family: 'Sora', sans-serif; min-height: 155px;
+            resize: none; outline: none;
+        }
+        .passage-box:focus { border-color: rgba(41,196,230,0.45); }
+
+        /* ── TOPICS BOX ── */
+        .topics-panel {
+            background: rgba(41,196,230,0.07);
+            border: 1px solid rgba(41,196,230,0.22);
+            border-left: 4px solid var(--ob-cyan);
+            border-radius: var(--radius-sm);
+            padding: 20px 22px; margin-bottom: 22px;
+        }
+        .topics-panel h3 {
+            font-family: 'Sora', sans-serif; font-size: 15px;
+            font-weight: 700; color: var(--ob-white); margin-bottom: 6px;
+        }
+        .topics-panel .instr {
+            font-size: 13px; color: var(--ob-muted); margin-bottom: 14px; line-height: 1.6;
+        }
+        .topic-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+        .topic-list li {
+            display: flex; align-items: flex-start; gap: 10px;
+            font-size: 14.5px; font-weight: 500; color: var(--ob-text); line-height: 1.5;
+        }
+        .topic-list li .bullet {
+            width: 22px; height: 22px; border-radius: 6px; flex-shrink: 0; margin-top: 1px;
+            background: rgba(41,196,230,0.2); border: 1px solid rgba(41,196,230,0.4);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: 700; color: var(--ob-cyan);
+        }
+
+        /* ── UPLOAD ZONE ── */
+        .upload-zone {
+            border: 2px dashed rgba(41,196,230,0.28);
+            border-radius: var(--radius-sm); padding: 38px 22px;
+            text-align: center; cursor: pointer;
+            transition: all 0.28s; position: relative; margin-bottom: 6px;
+        }
+        .upload-zone:hover { border-color: var(--ob-cyan); background: rgba(41,196,230,0.05); }
+        .upload-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+        .upload-zone .u-icon { font-size: 34px; margin-bottom: 10px; display: block; }
+        .upload-zone .u-label { font-size: 14px; color: var(--ob-muted); }
+        .upload-zone .u-label strong { color: var(--ob-cyan); }
+        .file-chip {
+            display: inline-flex; align-items: center; gap: 7px;
+            font-size: 13px; color: var(--ob-cyan); margin-top: 9px;
+            padding: 4px 12px; background: rgba(41,196,230,0.1);
+            border: 1px solid rgba(41,196,230,0.25); border-radius: 20px;
+            min-height: 26px;
+        }
+
+        /* ── BUTTONS ── */
+        .btn {
+            display: inline-flex; align-items: center; gap: 9px;
+            padding: 13px 28px; border-radius: 50px;
+            font-size: 14.5px; font-weight: 600;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            border: none; cursor: pointer; transition: all 0.28s;
+            position: relative; overflow: hidden; margin-top: 18px;
+        }
+        .btn::before {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(rgba(255,255,255,0.11), transparent);
+            opacity: 0; transition: opacity 0.28s;
+        }
+        .btn:hover::before { opacity: 1; }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--ob-cyan), var(--ob-deep));
+            color: #fff; box-shadow: 0 6px 22px rgba(41,196,230,0.42);
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(41,196,230,0.5); }
+        .btn-danger {
+            background: linear-gradient(135deg, #F25C5C, #C0392B);
+            color: #fff; animation: pulseRed 1.4s ease infinite;
+        }
+        @keyframes pulseRed {
+            0%,100% { box-shadow: 0 6px 22px rgba(242,92,92,0.38); }
+            50%      { box-shadow: 0 8px 34px rgba(242,92,92,0.68); }
+        }
+        .btn-success {
+            background: linear-gradient(135deg, #22D07A, #1aaa62);
+            color: #fff; box-shadow: 0 6px 22px rgba(34,208,122,0.38);
+        }
+        .btn-success:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(34,208,122,0.5); }
+
+        /* ── LOADER ── */
+        .loader-wrap {
+            display: none; align-items: center; gap: 13px; margin-top: 18px;
+            padding: 15px 18px; background: rgba(41,196,230,0.07);
+            border: 1px solid rgba(41,196,230,0.18); border-radius: var(--radius-sm);
+        }
+        .loader-wrap.show { display: flex; }
+        .spinner {
+            width: 22px; height: 22px; border-radius: 50%;
+            border: 3px solid rgba(41,196,230,0.18); border-top-color: var(--ob-cyan);
+            animation: spin 0.75s linear infinite; flex-shrink: 0;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loader-text { font-size: 13.5px; color: var(--ob-cyan); font-weight: 500; }
+
+        /* ── REC INDICATOR ── */
+        .rec-indicator {
+            display: none; align-items: center; gap: 9px;
+            margin-top: 14px; font-size: 13.5px; color: #F25C5C; font-weight: 600;
+        }
+        .rec-indicator.show { display: flex; }
+        .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #F25C5C; animation: blink 1s ease infinite; }
+        @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.15; } }
+
+        /* ── RESULT BOX ── */
+        .result-box {
+            margin-top: 22px; border-radius: var(--radius);
+            overflow: hidden; display: none;
+            animation: stepIn 0.4s ease both;
+        }
+        .result-header {
+            padding: 18px 26px;
+            display: flex; align-items: center; justify-content: space-between;
+            flex-wrap: wrap; gap: 12px;
+        }
+        .result-pass { border: 1px solid rgba(34,208,122,0.28); background: rgba(34,208,122,0.04); }
+        .result-fail { border: 1px solid rgba(242,92,92,0.28); background: rgba(242,92,92,0.04); }
+        .result-info { border: 1px solid rgba(41,196,230,0.28); background: rgba(41,196,230,0.04); }
+        .result-pass .result-header { background: linear-gradient(135deg, rgba(34,208,122,0.22), rgba(34,208,122,0.08)); border-bottom: 1px solid rgba(34,208,122,0.22); }
+        .result-fail .result-header { background: linear-gradient(135deg, rgba(242,92,92,0.22), rgba(242,92,92,0.08)); border-bottom: 1px solid rgba(242,92,92,0.22); }
+        .result-info .result-header { background: linear-gradient(135deg, rgba(41,196,230,0.18), rgba(41,196,230,0.06)); border-bottom: 1px solid rgba(41,196,230,0.18); }
+
+        .verdict { display: flex; align-items: center; gap: 11px; }
+        .verdict-icon { font-size: 26px; }
+        .verdict-label { font-family: 'Sora', sans-serif; font-size: 19px; font-weight: 700; }
+        .result-pass .verdict-label { color: var(--ob-pass); }
+        .result-fail .verdict-label { color: var(--ob-fail); }
+        .result-info .verdict-label { color: var(--ob-cyan); }
+        .verdict-sub { font-size: 12.5px; color: var(--ob-muted); margin-top: 2px; }
+
+        .score-pill {
+            font-size: 22px; font-weight: 800; font-family: 'Sora', sans-serif;
+            padding: 5px 18px; border-radius: 30px;
+        }
+        .result-pass .score-pill { background: rgba(34,208,122,0.14); color: var(--ob-pass); border: 1px solid rgba(34,208,122,0.28); }
+        .result-fail .score-pill { background: rgba(242,92,92,0.14); color: var(--ob-fail); border: 1px solid rgba(242,92,92,0.28); }
+
+        .result-body { padding: 22px 26px; }
+
+        .metrics-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+        @media(max-width:500px){ .metrics-row { grid-template-columns: 1fr; } }
+        .metric-tile {
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07);
+            border-radius: var(--radius-sm); padding: 13px 16px;
+        }
+        .m-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ob-muted); margin-bottom: 4px; }
+        .m-value { font-size: 19px; font-weight: 700; font-family: 'Sora', sans-serif; color: var(--ob-white); }
+        .m-value.pass { color: var(--ob-pass); }
+
+        .detail-row { margin-bottom: 13px; }
+        .detail-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ob-muted); margin-bottom: 5px; }
+        .detail-val {
+            font-size: 13.5px; color: var(--ob-text); line-height: 1.65;
+            padding: 9px 13px; background: rgba(255,255,255,0.035);
+            border-radius: 8px; border-left: 3px solid rgba(41,196,230,0.38);
+        }
+        .detail-val.red  { border-left-color: rgba(242,92,92,0.55); }
+        .detail-val.amber { border-left-color: rgba(249,168,37,0.55); }
+
+        hr.rule { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 17px 0; }
+
+        /* Writing result grid */
+        .w-grid { display: grid; gap: 14px; }
+        .w-tile {
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(41,196,230,0.13);
+            border-radius: var(--radius-sm); padding: 16px 18px;
+        }
+        .w-key { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ob-cyan); margin-bottom: 7px; }
+        .w-val { font-size: 13.5px; color: var(--ob-text); line-height: 1.7; }
+        .json-toggle { font-size: 12.5px; color: var(--ob-muted); cursor: pointer; text-decoration: underline; margin-top: 14px; display: inline-block; }
+        .json-raw {
+            display: none; margin-top: 10px; padding: 14px;
+            background: rgba(0,0,0,0.28); border-radius: var(--radius-sm);
+            font-family: 'Courier New', monospace; font-size: 11.5px;
+            color: #87C9E0; line-height: 1.85; white-space: pre-wrap;
+            border: 1px solid rgba(41,196,230,0.13);
+        }
+
+        @media(max-width:600px){
+            .card { padding: 22px 16px; }
+            .result-header { padding: 15px 18px; }
+            .result-body   { padding: 18px 18px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="bg-canvas">
+    <div class="bg-orb bg-orb-1"></div>
+    <div class="bg-orb bg-orb-2"></div>
+    <div class="bg-orb bg-orb-3"></div>
+    <div class="grid-overlay"></div>
+</div>
+
+<div class="app-wrapper">
+
+    <!-- HEADER -->
+    <header class="header">
+        <div class="logo-group">
+            <div class="logo-mark">📘</div>
+            <div class="logo-text">
+                <div class="brand">olive<span>board</span></div>
+                <div class="tagline">RBI Language Proficiency Test</div>
+            </div>
+        </div>
+        <div class="header-badge">LPT Examiner</div>
+    </header>
+
+    <!-- ── STEP 1: MODE ── -->
+    <div id="step-mode" class="container active">
+        <div class="page-hero">
+            <div class="eyebrow">Language Proficiency Test</div>
+            <h1>Choose Your <em>Test Module</em></h1>
+            <p class="subtitle">Select the area you want to evaluate. Each module precisely measures a key RBI language skill.</p>
+        </div>
+        <div class="mode-grid">
+            <div class="mode-card mode-reading" onclick="selectMode('reading')">
+                <div class="mode-icon-wrap">🎤</div>
+                <div class="mode-title">Reading Test</div>
+                <div class="mode-desc">Record yourself reading a passage aloud. Assessed on fluency, pronunciation, and speaking pace.</div>
+                <div class="mode-arrow">Begin Test →</div>
+            </div>
+            <div class="mode-card mode-writing" onclick="selectMode('writing')">
+                <div class="mode-icon-wrap">✍️</div>
+                <div class="mode-title">Writing Test</div>
+                <div class="mode-desc">Upload a scan of your handwritten answer. AI evaluates grammar, spelling, and structure.</div>
+                <div class="mode-arrow">Begin Test →</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── STEP 2: LANGUAGE ── -->
+    <div id="step-language" class="container">
+        <span class="back-nav" onclick="goBack('mode')">← Back to Menu</span>
+        <div class="progress-strip">
+            <div class="prog-step done"><div class="prog-dot">✓</div><span>Test Type</span></div>
+            <div class="prog-line done"></div>
+            <div class="prog-step active"><div class="prog-dot">2</div><span>Language</span></div>
+            <div class="prog-line"></div>
+            <div class="prog-step"><div class="prog-dot">3</div><span>Evaluate</span></div>
+        </div>
+        <div class="card">
+            <h2>Select Language</h2>
+            <p>Choose language for your <strong id="modeLabel" style="color:var(--ob-cyan)"></strong> test.</p>
+            <div class="select-wrap">
+                <select id="languageSelect" onchange="startTest()">
+                    <option value="" disabled selected>— Choose a language —</option>
+                    <option value="hi">Hindi (हिन्दी)</option>
+                    <option value="ml">Malayalam (മലയാളം)</option>
+                    <option value="te">Telugu (తెలుగు)</option>
+                </select>
+                <div class="select-arrow">⌄</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── STEP 3A: READING ── -->
+    <div id="step-reading" class="container">
+        <span class="back-nav" onclick="goBack('language')">← Change Language</span>
+        <div class="progress-strip">
+            <div class="prog-step done"><div class="prog-dot">✓</div><span>Test Type</span></div>
+            <div class="prog-line done"></div>
+            <div class="prog-step done"><div class="prog-dot">✓</div><span>Language</span></div>
+            <div class="prog-line done"></div>
+            <div class="prog-step active"><div class="prog-dot">3</div><span>Reading</span></div>
+        </div>
+        <div class="card">
+            <h2>📖 Reading Fluency</h2>
+            <p>Read the passage below aloud clearly and naturally. Hit <strong style="color:var(--ob-cyan)">Start Recording</strong> when ready.</p>
+            <textarea id="readingText" class="passage-box" readonly>Loading passage…</textarea>
+
+            <button id="recordBtn" class="btn btn-primary" onclick="toggleRecording()">
+                <span>🎤</span> Start Recording
+            </button>
+
+            <div class="rec-indicator" id="recIndicator">
+                <div class="rec-dot"></div> Recording in progress…
+            </div>
+            <div class="loader-wrap" id="readingLoader">
+                <div class="spinner"></div>
+                <div class="loader-text">Analyzing audio… please wait.</div>
+            </div>
+
+            <div id="readingResult" class="result-box">
+                <div class="result-header">
+                    <div class="verdict">
+                        <div class="verdict-icon" id="r_icon"></div>
+                        <div>
+                            <div class="verdict-label" id="r_status"></div>
+                            <div class="verdict-sub">Reading Evaluation Result</div>
+                        </div>
+                    </div>
+                    <div class="score-pill" id="r_score"></div>
+                </div>
+                <div class="result-body">
+                    <div class="metrics-row">
+                        <div class="metric-tile">
+                            <div class="m-label">Speaking Speed</div>
+                            <div class="m-value" id="r_wpm"></div>
+                        </div>
+                        <div class="metric-tile">
+                            <div class="m-label">Accuracy</div>
+                            <div class="m-value pass" id="r_acc"></div>
+                        </div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">Missed Words</div>
+                        <div class="detail-val red" id="r_missed"></div>
+                    </div>
+                    <div class="detail-row">
+                        <div class="detail-label">Extra / Unexpected Words</div>
+                        <div class="detail-val amber" id="r_extra"></div>
+                    </div>
+                    <hr class="rule">
+                    <div class="detail-row">
+                        <div class="detail-label">Your Transcription</div>
+                        <div class="detail-val" id="r_transcription"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── STEP 3B: WRITING ── -->
+    <div id="step-writing" class="container">
+        <span class="back-nav" onclick="goBack('language')">← Change Language</span>
+        <div class="progress-strip">
+            <div class="prog-step done"><div class="prog-dot">✓</div><span>Test Type</span></div>
+            <div class="prog-line done"></div>
+            <div class="prog-step done"><div class="prog-dot">✓</div><span>Language</span></div>
+            <div class="prog-line done"></div>
+            <div class="prog-step active"><div class="prog-dot">3</div><span>Writing</span></div>
+        </div>
+
+        <!-- Topics Panel -->
+        <div class="topics-panel">
+            <h3>📝 Writing Topics</h3>
+            <p class="instr">Write a short passage (5–10 lines) on <strong style="color:var(--ob-white)">ONE</strong> of the following topics in <strong id="writingLangLabel" style="color:var(--ob-cyan)"></strong>:</p>
+            <ul id="topicsList" class="topic-list">
+                <li><div class="bullet">·</div><span>Loading topics…</span></li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>Upload Answer Sheet</h2>
+            <p>Scan your handwritten page and upload the PDF or image below.</p>
+
+            <div class="upload-zone">
+                <input type="file" id="fileInput" accept="image/*,.pdf" onchange="updateFileName()">
+                <span class="u-icon">📄</span>
+                <div class="u-label"><strong>Click to Upload</strong> or drag & drop<br><span style="font-size:12px;opacity:0.6">PDF, JPG, PNG — Max 10 MB</span></div>
+            </div>
+            <div style="text-align:center">
+                <div class="file-chip" id="fileChip"></div>
+            </div>
+
+            <button class="btn btn-success" onclick="uploadWriting()">
+                <span>🔍</span> Analyze Writing
+            </button>
+
+            <div class="loader-wrap" id="writingLoader">
+                <div class="spinner"></div>
+                <div class="loader-text">Processing file and evaluating your writing…</div>
+            </div>
+
+            <div id="writingResult" class="result-box result-info">
+                <div class="result-header">
+                    <div class="verdict">
+                        <div class="verdict-icon">📋</div>
+                        <div>
+                            <div class="verdict-label">Evaluation Report</div>
+                            <div class="verdict-sub">Writing & Grammar Analysis</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="result-body">
+                    <div id="w_grid" class="w-grid"></div>
+                    <span class="json-toggle" onclick="toggleRaw()">View raw JSON ↓</span>
+                    <pre id="w_json_raw" class="json-raw"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /app-wrapper -->
+
+<script>
+    let currentMode = "";
+
+    /* ── NAVIGATION ── */
+    function selectMode(mode) {
+        currentMode = mode;
+        document.getElementById("modeLabel").innerText = mode === 'reading' ? "Reading" : "Writing";
+        switchTo("step-language");
+        document.getElementById("languageSelect").selectedIndex = 0;
+    }
+
+    function switchTo(id) {
+        document.querySelectorAll(".container").forEach(el => el.classList.remove("active"));
+        document.getElementById(id).classList.add("active");
+    }
+
+    function goBack(to) {
+        if (to === 'mode')     switchTo("step-mode");
+        if (to === 'language') {
+            switchTo("step-language");
+            document.getElementById("readingResult").style.display  = "none";
+            document.getElementById("writingResult").style.display  = "none";
+        }
+    }
+
+    async function startTest() {
+        const lang = document.getElementById("languageSelect").value;
+        if (!lang) return;
+        if (currentMode === 'reading') {
+            switchTo("step-reading");
+            fetchPassage(lang);
+        } else {
+            switchTo("step-writing");
+            const sel = document.getElementById("languageSelect");
+            document.getElementById("writingLangLabel").innerText =
+                sel.options[sel.selectedIndex].text;
+            fetchTopics(lang);
+        }
+    }
+
+    /* ── READING ── */
+    async function fetchPassage(lang) {
+        const box = document.getElementById("readingText");
+        box.value = "Fetching passage…";
+        try {
+            const res  = await fetch(`/api/get-passage/${lang}`);
+            const data = await res.json();
+            box.value  = data.text;
+        } catch (e) {
+            box.value = "Error loading passage. Please check backend connection.";
+        }
+    }
+
+    let mediaRecorder, chunks = [], isRecording = false;
+
+    async function toggleRecording() {
+        const btn = document.getElementById("recordBtn");
+        const ind = document.getElementById("recIndicator");
+        if (!isRecording) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            mediaRecorder.onstop = sendAudio;
+            mediaRecorder.start();
+            isRecording = true; chunks = [];
+            btn.innerHTML = '<span>⏹</span> Stop Recording';
+            btn.className = 'btn btn-danger';
+            ind.classList.add("show");
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            btn.innerHTML = '<span>🎤</span> Start Recording';
+            btn.className = 'btn btn-primary';
+            ind.classList.remove("show");
+        }
+    }
+
+    async function sendAudio() {
+        document.getElementById("readingLoader").classList.add("show");
+        document.getElementById("readingResult").style.display = "none";
+
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        const fd   = new FormData();
+        fd.append("audio_file",      blob, "rec.webm");
+        fd.append("reference_text",  document.getElementById("readingText").value);
+        fd.append("language",        document.getElementById("languageSelect").value);
+
+        try {
+            const res  = await fetch("/api/evaluate-reading", { method: "POST", body: fd });
+            const data = await res.json();
+            const pass = data.status === "Pass";
+            const box  = document.getElementById("readingResult");
+
+            box.style.display = "block";
+            box.className     = "result-box " + (pass ? "result-pass" : "result-fail");
+
+            document.getElementById("r_icon").innerText = pass ? "✅" : "❌";
+            document.getElementById("r_status").innerText = data.status;
+            document.getElementById("r_score").innerText  = data.score + "%";
+            document.getElementById("r_acc").innerText    = data.score + "%";
+            document.getElementById("r_wpm").innerText    = data.wpm + " WPM";
+            document.getElementById("r_missed").innerText =
+                data.metrics.missed_words_list.join(", ") || "None — Perfect!";
+            document.getElementById("r_extra").innerText =
+                data.metrics.extra_words_list.join(", ") || "None";
+            document.getElementById("r_transcription").innerText = data.user_transcription;
+        } catch (e) {
+            alert("Error analyzing audio. Please try again.");
+        } finally {
+            document.getElementById("readingLoader").classList.remove("show");
+        }
+    }
+
+    /* ── WRITING ── */
+    async function fetchTopics(lang) {
+        const list = document.getElementById("topicsList");
+        list.innerHTML = '<li><div class="bullet">·</div><span>Loading…</span></li>';
+        try {
+            const res  = await fetch(`/api/get-writing-topics/${lang}`);
+            const data = await res.json();
+            list.innerHTML = data.topics.map((t, i) =>
+                `<li><div class="bullet">${i + 1}</div><span>${t}</span></li>`
+            ).join("");
+        } catch (e) {
+            list.innerHTML = '<li><div class="bullet">!</div><span>Error loading topics. Please retry.</span></li>';
+        }
+    }
+
+    function updateFileName() {
+        const f    = document.getElementById("fileInput").files[0];
+        const chip = document.getElementById("fileChip");
+        chip.innerText = f ? "📎 " + f.name : "";
+    }
+
+    function toggleRaw() {
+        const el  = document.getElementById("w_json_raw");
+        const tog = document.querySelector(".json-toggle");
+        const vis = el.style.display === "block";
+        el.style.display = vis ? "none" : "block";
+        tog.innerText = vis ? "View raw JSON ↓" : "Hide raw JSON ↑";
+    }
+
+    async function uploadWriting() {
+        const file = document.getElementById("fileInput").files[0];
+        if (!file) return alert("Please upload a file first.");
+
+        document.getElementById("writingLoader").classList.add("show");
+        document.getElementById("writingResult").style.display = "none";
+
+        const fd = new FormData();
+        fd.append("file",     file);
+        fd.append("language", document.getElementById("languageSelect").value);
+
+        try {
+            const res  = await fetch("/api/evaluate-writing", { method: "POST", body: fd });
+            const data = await res.json();
+
+            /* Render pretty tiles */
+            const grid = document.getElementById("w_grid");
+            grid.innerHTML = "";
+            for (const [key, val] of Object.entries(data)) {
+                const tile = document.createElement("div");
+                tile.className = "w-tile";
+                const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                const value = typeof val === 'object' ? JSON.stringify(val, null, 2) : val;
+                tile.innerHTML = `<div class="w-key">${label}</div><div class="w-val">${value}</div>`;
+                grid.appendChild(tile);
+            }
+            document.getElementById("w_json_raw").innerText = JSON.stringify(data, null, 2);
+            document.getElementById("writingResult").style.display = "block";
+        } catch (e) {
+            alert("Error analyzing file. Please try again.");
+        } finally {
+            document.getElementById("writingLoader").classList.remove("show");
+        }
+    }
+</script>
+</body>
+</html>

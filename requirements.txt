@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+openai
+Levenshtein
+thefuzz
+jinja2
+pymupdf
+numpy
