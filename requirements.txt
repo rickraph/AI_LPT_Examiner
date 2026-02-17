@@ -7,4 +7,6 @@ Levenshtein
 thefuzz
 jinja2
 pymupdf
-numpy
+numpygit
+
+

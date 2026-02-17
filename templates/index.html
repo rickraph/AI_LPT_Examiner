@@ -563,15 +563,19 @@
                             <div class="m-value pass" id="r_acc"></div>
                         </div>
                     </div>
-                    <div class="detail-row">
+                    <div class="detail-row" id="r_missed_row">
                         <div class="detail-label">Missed Words</div>
                         <div class="detail-val red" id="r_missed"></div>
                     </div>
-                    <div class="detail-row">
+                    <div class="detail-row" id="r_extra_row">
                         <div class="detail-label">Extra / Unexpected Words</div>
                         <div class="detail-val amber" id="r_extra"></div>
                     </div>
                     <hr class="rule">
+                    <div class="detail-row" id="r_feedback_row" style="display:none">
+                        <div class="detail-label">Examiner Feedback</div>
+                        <div class="detail-val" id="r_feedback" style="border-left-color:rgba(41,196,230,0.55)"></div>
+                    </div>
                     <div class="detail-row">
                         <div class="detail-label">Your Transcription</div>
                         <div class="detail-val" id="r_transcription"></div>
@@ -703,22 +707,42 @@
         const btn = document.getElementById("recordBtn");
         const ind = document.getElementById("recIndicator");
         if (!isRecording) {
+            chunks = [];
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.ondataavailable = e => chunks.push(e.data);
+            // Use timeslice of 100ms so chunks are collected continuously —
+            // this prevents the last chunk being lost when stop() is called.
+            mediaRecorder = new MediaRecorder(stream, { mimeType: getSupportedMimeType() });
+            mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };
             mediaRecorder.onstop = sendAudio;
-            mediaRecorder.start();
-            isRecording = true; chunks = [];
+            mediaRecorder.start(100); // collect a chunk every 100ms
+            isRecording = true;
             btn.innerHTML = '<span>⏹</span> Stop Recording';
             btn.className = 'btn btn-danger';
             ind.classList.add("show");
         } else {
-            mediaRecorder.stop();
+            // requestData() forces the current chunk to be emitted before stop
+            if (mediaRecorder.state === 'recording') {
+                mediaRecorder.requestData();
+            }
+            // Small delay so the final ondataavailable fires before onstop
+            setTimeout(() => {
+                mediaRecorder.stop();
+                // Stop all mic tracks to release the microphone
+                mediaRecorder.stream.getTracks().forEach(t => t.stop());
+            }, 150);
             isRecording = false;
             btn.innerHTML = '<span>🎤</span> Start Recording';
             btn.className = 'btn btn-primary';
             ind.classList.remove("show");
         }
+    }
+
+    function getSupportedMimeType() {
+        const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg', 'audio/mp4'];
+        for (const type of types) {
+            if (MediaRecorder.isTypeSupported(type)) return type;
+        }
+        return '';
     }
 
     async function sendAudio() {
@@ -727,36 +751,71 @@
 
         const blob = new Blob(chunks, { type: 'audio/webm' });
         const fd   = new FormData();
-        fd.append("audio_file",      blob, "rec.webm");
-        fd.append("reference_text",  document.getElementById("readingText").value);
-        fd.append("language",        document.getElementById("languageSelect").value);
+        fd.append("audio_file",     blob, "rec.webm");
+        fd.append("reference_text", document.getElementById("readingText").value);
+        fd.append("language",       document.getElementById("languageSelect").value);
 
         try {
             const res  = await fetch("/api/evaluate-reading", { method: "POST", body: fd });
             const data = await res.json();
-            const pass = data.status === "Pass";
-            const box  = document.getElementById("readingResult");
 
-            box.style.display = "block";
-            box.className     = "result-box " + (pass ? "result-pass" : "result-fail");
+            if (data.error) {
+                alert("Error from server: " + data.error);
+                return;
+            }
 
-            document.getElementById("r_icon").innerText = pass ? "✅" : "❌";
-            document.getElementById("r_status").innerText = data.status;
-            document.getElementById("r_score").innerText  = data.score + "%";
-            document.getElementById("r_acc").innerText    = data.score + "%";
-            document.getElementById("r_wpm").innerText    = data.wpm + " WPM";
-            document.getElementById("r_missed").innerText =
-                data.metrics.missed_words_list.join(", ") || "None — Perfect!";
-            document.getElementById("r_extra").innerText =
-                data.metrics.extra_words_list.join(", ") || "None";
-            document.getElementById("r_transcription").innerText = data.user_transcription;
+            const pass    = data.status === "Pass";
+            const resultBox = document.getElementById("readingResult");
+
+            // Show the box and set pass/fail colour class
+            resultBox.style.display = "block";
+            resultBox.className     = "result-box " + (pass ? "result-pass" : "result-fail");
+
+            // Populate every field
+            document.getElementById("r_icon").innerText          = pass ? "✅" : "❌";
+            document.getElementById("r_status").innerText        = data.status;
+            document.getElementById("r_score").innerText         = data.score + "%";
+            document.getElementById("r_acc").innerText           = data.score + "%";
+            document.getElementById("r_wpm").innerText           = data.wpm + " WPM";
+
+            const missed = (data.metrics.missed_words_list || []);
+            const extra  = (data.metrics.extra_words_list  || []);
+
+            // For ML/TE holistic mode these are empty — hide the rows to avoid
+            // showing misleading "None" when GPT didn't do word-level analysis
+            const missedRow = document.getElementById("r_missed_row");
+            const extraRow  = document.getElementById("r_extra_row");
+            if (missed.length > 0) {
+                document.getElementById("r_missed").innerText = missed.join(", ");
+                if (missedRow) missedRow.style.display = "block";
+            } else {
+                if (missedRow) missedRow.style.display = "none";
+            }
+            if (extra.length > 0) {
+                document.getElementById("r_extra").innerText = extra.join(", ");
+                if (extraRow) extraRow.style.display = "block";
+            } else {
+                if (extraRow) extraRow.style.display = "none";
+            }
+
+            document.getElementById("r_transcription").innerText = data.user_transcription || "";
+
+            // Show GPT examiner feedback if available (Malayalam/Telugu)
+            const feedbackRow = document.getElementById("r_feedback_row");
+            const feedbackEl  = document.getElementById("r_feedback");
+            if (data.feedback) {
+                feedbackEl.innerText  = data.feedback;
+                feedbackRow.style.display = "block";
+            } else {
+                feedbackRow.style.display = "none";
+            }
+
         } catch (e) {
-            alert("Error analyzing audio. Please try again.");
+            alert("Request failed: " + e.message);
         } finally {
             document.getElementById("readingLoader").classList.remove("show");
         }
     }
-
     /* ── WRITING ── */
     async function fetchTopics(lang) {
         const list = document.getElementById("topicsList");
