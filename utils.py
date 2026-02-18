@@ -234,7 +234,7 @@ Return ONLY valid JSON, no markdown:
     return {
         "score": round(score, 2),
         "wpm": wpm,
-        "status": "Pass" if score >= 75 and wpm >= wpm_min else "Fail",
+        "status": "Pass" if score >= 70 and wpm >= wpm_min else "Fail",
         "user_transcription": user_text,
         "feedback": result.get("feedback", ""),
         "metrics": {
