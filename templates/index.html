@@ -419,14 +419,39 @@
 
         hr.rule { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 17px 0; }
 
-        /* Writing result grid */
-        .w-grid { display: grid; gap: 14px; }
-        .w-tile {
-            background: rgba(255,255,255,0.04); border: 1px solid rgba(41,196,230,0.13);
-            border-radius: var(--radius-sm); padding: 16px 18px;
+        /* Writing result */
+        .w-score-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+        @media(max-width:600px){ .w-score-row { grid-template-columns: 1fr 1fr; } }
+        .w-score-tile {
+            background: rgba(41,196,230,0.07); border: 1px solid rgba(41,196,230,0.18);
+            border-radius: var(--radius-sm); padding: 12px 14px; text-align: center;
         }
-        .w-key { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ob-cyan); margin-bottom: 7px; }
-        .w-val { font-size: 13.5px; color: var(--ob-text); line-height: 1.7; }
+        .w-score-tile.highlight { background: rgba(41,196,230,0.15); border-color: rgba(41,196,230,0.4); }
+        .w-score-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ob-muted); margin-bottom: 4px; }
+        .w-score-val { font-size: 22px; font-weight: 800; font-family: 'Sora', sans-serif; color: var(--ob-cyan); }
+        .w-score-val.good  { color: var(--ob-pass); }
+        .w-score-val.warn  { color: #F9A825; }
+        .w-score-val.bad   { color: var(--ob-fail); }
+        .w-section { margin-bottom: 16px; }
+        .w-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ob-muted); margin-bottom: 6px; }
+        .w-section-val {
+            font-size: 13.5px; color: var(--ob-text); line-height: 1.75;
+            padding: 10px 14px; background: rgba(255,255,255,0.035);
+            border-radius: 8px; border-left: 3px solid rgba(41,196,230,0.38);
+        }
+        .w-error-list { list-style: none; padding: 0; margin: 0; }
+        .w-error-list li {
+            padding: 6px 12px; margin-bottom: 5px; font-size: 13px;
+            background: rgba(242,92,92,0.07); border-left: 3px solid rgba(242,92,92,0.4);
+            border-radius: 6px; color: var(--ob-text);
+        }
+        .w-error-list.grammar li { background: rgba(249,168,37,0.07); border-left-color: rgba(249,168,37,0.4); }
+        .w-topic-badge {
+            display: inline-block; padding: 4px 14px; border-radius: 20px;
+            background: rgba(41,196,230,0.15); border: 1px solid rgba(41,196,230,0.35);
+            color: var(--ob-cyan); font-size: 13px; font-weight: 600; margin-bottom: 16px;
+        }
+        .no-errors { color: var(--ob-pass); font-size: 13px; font-style: italic; }
         .json-toggle { font-size: 12.5px; color: var(--ob-muted); cursor: pointer; text-decoration: underline; margin-top: 14px; display: inline-block; }
         .json-raw {
             display: none; margin-top: 10px; padding: 14px;
@@ -627,18 +652,67 @@
                 <div class="loader-text">Processing file and evaluating your writing…</div>
             </div>
 
-            <div id="writingResult" class="result-box result-info">
+            <div id="writingResult" class="result-box result-info" style="display:none">
                 <div class="result-header">
                     <div class="verdict">
                         <div class="verdict-icon">📋</div>
                         <div>
-                            <div class="verdict-label">Evaluation Report</div>
-                            <div class="verdict-sub">Writing & Grammar Analysis</div>
+                            <div class="verdict-label">Writing Evaluation Report</div>
+                            <div class="verdict-sub" id="w_topic_sub">Grammar & Content Analysis</div>
                         </div>
                     </div>
+                    <div class="score-pill" id="w_final_pill"></div>
                 </div>
                 <div class="result-body">
-                    <div id="w_grid" class="w-grid"></div>
+                    <!-- Topic badge -->
+                    <div id="w_topic_badge" class="w-topic-badge" style="display:none"></div>
+
+                    <!-- Score tiles row -->
+                    <div class="w-score-row">
+                        <div class="w-score-tile highlight">
+                            <div class="w-score-label">Final Score</div>
+                            <div class="w-score-val" id="w_final_score">—</div>
+                        </div>
+                        <div class="w-score-tile">
+                            <div class="w-score-label">Content</div>
+                            <div class="w-score-val" id="w_content_score">—</div>
+                        </div>
+                        <div class="w-score-tile">
+                            <div class="w-score-label">Language</div>
+                            <div class="w-score-val" id="w_lang_score">—</div>
+                        </div>
+                        <div class="w-score-tile">
+                            <div class="w-score-label">Legibility</div>
+                            <div class="w-score-val" id="w_legibility">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Feedback -->
+                    <div class="w-section">
+                        <div class="w-section-label">Examiner Feedback</div>
+                        <div class="w-section-val" id="w_feedback"></div>
+                    </div>
+
+                    <!-- Spelling errors -->
+                    <div class="w-section" id="w_spelling_section">
+                        <div class="w-section-label">Spelling Errors</div>
+                        <ul class="w-error-list" id="w_spelling_list"></ul>
+                    </div>
+
+                    <!-- Grammar errors -->
+                    <div class="w-section" id="w_grammar_section">
+                        <div class="w-section-label">Grammar Errors</div>
+                        <ul class="w-error-list grammar" id="w_grammar_list"></ul>
+                    </div>
+
+                    <hr class="rule">
+
+                    <!-- Transcription -->
+                    <div class="w-section">
+                        <div class="w-section-label">Your Transcription (as written)</div>
+                        <div class="w-section-val" id="w_transcription"></div>
+                    </div>
+
                     <span class="json-toggle" onclick="toggleRaw()">View raw JSON ↓</span>
                     <pre id="w_json_raw" class="json-raw"></pre>
                 </div>
@@ -781,21 +855,25 @@
             const missed = (data.metrics.missed_words_list || []);
             const extra  = (data.metrics.extra_words_list  || []);
 
-            // For ML/TE holistic mode these are empty — hide the rows to avoid
-            // showing misleading "None" when GPT didn't do word-level analysis
             const missedRow = document.getElementById("r_missed_row");
             const extraRow  = document.getElementById("r_extra_row");
+
+            // Missed words — show if any
             if (missed.length > 0) {
                 document.getElementById("r_missed").innerText = missed.join(", ");
                 if (missedRow) missedRow.style.display = "block";
             } else {
-                if (missedRow) missedRow.style.display = "none";
+                document.getElementById("r_missed").innerText = "None — all words covered ✓";
+                if (missedRow) missedRow.style.display = "block";
             }
+
+            // Extra / wrong words — show if any
             if (extra.length > 0) {
                 document.getElementById("r_extra").innerText = extra.join(", ");
                 if (extraRow) extraRow.style.display = "block";
             } else {
-                if (extraRow) extraRow.style.display = "none";
+                document.getElementById("r_extra").innerText = "None ✓";
+                if (extraRow) extraRow.style.display = "block";
             }
 
             document.getElementById("r_transcription").innerText = data.user_transcription || "";
@@ -860,21 +938,81 @@
             const res  = await fetch("/api/evaluate-writing", { method: "POST", body: fd });
             const data = await res.json();
 
-            /* Render pretty tiles */
-            const grid = document.getElementById("w_grid");
-            grid.innerHTML = "";
-            for (const [key, val] of Object.entries(data)) {
-                const tile = document.createElement("div");
-                tile.className = "w-tile";
-                const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-                const value = typeof val === 'object' ? JSON.stringify(val, null, 2) : val;
-                tile.innerHTML = `<div class="w-key">${label}</div><div class="w-val">${value}</div>`;
-                grid.appendChild(tile);
+            if (data.error) { alert("Error: " + data.error); return; }
+
+            // ── Score colour helper ──────────────────────────────────
+            function scoreColor(v, max) {
+                const pct = v / max;
+                if (pct >= 0.75) return "good";
+                if (pct >= 0.50) return "warn";
+                return "bad";
             }
+
+            // ── Topic badge ──────────────────────────────────────────
+            const topicBadge = document.getElementById("w_topic_badge");
+            const topicSub   = document.getElementById("w_topic_sub");
+            if (data.topic_identified) {
+                topicBadge.innerText    = "📝 Topic: " + data.topic_identified;
+                topicBadge.style.display = "inline-block";
+                topicSub.innerText      = "Topic: " + data.topic_identified;
+            } else {
+                topicBadge.style.display = "none";
+                topicSub.innerText = "Grammar & Content Analysis";
+            }
+
+            // ── Score tiles ──────────────────────────────────────────
+            const fin = parseFloat(data.final_score   || 0);
+            const con = parseFloat(data.content_score || 0);
+            const lng = parseFloat(data.language_score|| 0);
+            const leg = parseFloat(data.legibility_score || 0);
+
+            const finEl = document.getElementById("w_final_score");
+            finEl.innerText   = fin.toFixed(1) + "/10";
+            finEl.className   = "w-score-val " + scoreColor(fin, 10);
+
+            document.getElementById("w_final_pill").innerText  = fin.toFixed(1) + "/10";
+            document.getElementById("w_content_score").innerText = con.toFixed(1) + "/10";
+            document.getElementById("w_lang_score").innerText    = lng.toFixed(1) + "/10";
+            document.getElementById("w_legibility").innerText    = leg + "/10";
+
+            // ── Feedback ─────────────────────────────────────────────
+            document.getElementById("w_feedback").innerText = data.feedback || "—";
+
+            // ── Spelling errors ──────────────────────────────────────
+            const spellingList = document.getElementById("w_spelling_list");
+            const spellingErrors = data.spelling_errors || [];
+            if (spellingErrors.length > 0) {
+                spellingList.innerHTML = spellingErrors.map(e =>
+                    `<li>✗ ${e}</li>`).join("");
+                document.getElementById("w_spelling_section").style.display = "block";
+            } else {
+                spellingList.innerHTML = '<li style="background:rgba(34,208,122,0.07);border-left-color:rgba(34,208,122,0.4);color:var(--ob-pass)">✓ No spelling errors found</li>';
+                document.getElementById("w_spelling_section").style.display = "block";
+            }
+
+            // ── Grammar errors ───────────────────────────────────────
+            const grammarList = document.getElementById("w_grammar_list");
+            const grammarErrors = data.grammar_errors || [];
+            if (grammarErrors.length > 0) {
+                grammarList.innerHTML = grammarErrors.map(e =>
+                    `<li>⚠ ${e}</li>`).join("");
+                document.getElementById("w_grammar_section").style.display = "block";
+            } else {
+                grammarList.innerHTML = '<li style="background:rgba(34,208,122,0.07);border-left-color:rgba(34,208,122,0.4);color:var(--ob-pass)">✓ No grammar errors found</li>';
+                document.getElementById("w_grammar_section").style.display = "block";
+            }
+
+            // ── Transcription ────────────────────────────────────────
+            document.getElementById("w_transcription").innerText =
+                data.transcription || "Could not transcribe.";
+
+            // ── Raw JSON ─────────────────────────────────────────────
             document.getElementById("w_json_raw").innerText = JSON.stringify(data, null, 2);
+
             document.getElementById("writingResult").style.display = "block";
+
         } catch (e) {
-            alert("Error analyzing file. Please try again.");
+            alert("Error analyzing file: " + e.message);
         } finally {
             document.getElementById("writingLoader").classList.remove("show");
         }

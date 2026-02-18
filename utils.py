@@ -2,26 +2,31 @@ import os
 import json
 import re
 import string
+import time
 import difflib
 import base64
 import subprocess
 import Levenshtein
-from openai import OpenAI
+import google.generativeai as genai
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
 from dotenv import load_dotenv
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-WHISPER_LANGUAGES   = {'hi', 'en', 'ta', 'bn', 'gu', 'pa', 'ur'}
-GPT_AUDIO_LANGUAGES = {'ml', 'te', 'kn', 'mr'}
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 LANG_NAMES = {
     'ml': 'Malayalam', 'te': 'Telugu', 'kn': 'Kannada',
     'hi': 'Hindi',     'ta': 'Tamil',  'bn': 'Bengali',
+    'en': 'English',
 }
 
-WPM_THRESHOLD         = {'hi': 40, 'ml': 20, 'te': 20}
+WPM_THRESHOLD         = {'hi': 40, 'ml': 20, 'te': 20, 'ta': 20, 'kn': 20}
 DEFAULT_WPM_THRESHOLD = 22
+GEMINI_FLASH          = "gemini-2.0-flash"
+
+# Retry settings for 429 / 503 transient errors
+MAX_RETRIES  = 4
+RETRY_DELAYS = [2, 5, 10, 20]   # seconds between retries (exponential-ish)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -37,274 +42,287 @@ def normalize_text(text: str) -> str:
     return " ".join(text.translate(translator).split())
 
 
-def convert_to_mp3(audio_path: str) -> str:
-    """
-    Convert any browser audio (webm/ogg/mp4) to mp3 via ffmpeg.
-    GPT-4o Audio only accepts 'wav' or 'mp3'.
-    Returns path to the new mp3 file.
-    """
-    mp3_path = audio_path.rsplit('.', 1)[0] + '_conv.mp3'
-    result = subprocess.run(
-        ['ffmpeg', '-y', '-i', audio_path,
-         '-ar', '16000', '-ac', '1', '-b:a', '64k',
-         mp3_path],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg error: {result.stderr[-300:]}")
-    return mp3_path
-
-
 def get_audio_duration(audio_path: str) -> float:
-    """Get duration in seconds via ffprobe, fall back to size estimate."""
     try:
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
              '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=10
         )
-        return float(result.stdout.strip())
+        val = result.stdout.strip()
+        if val:
+            return float(val)
     except Exception:
         pass
     try:
-        size_kb = os.path.getsize(audio_path) / 1024
-        return max(size_kb / 16, 1.0)
+        return max(os.path.getsize(audio_path) / 1024 / 16, 1.0)
     except Exception:
         return 30.0
 
 
-# ─────────────────────────────────────────────────────────────────────
-# PATH A: Hindi / English — Whisper + string diff
-# ─────────────────────────────────────────────────────────────────────
-
-def transcribe_whisper(audio_path: str, reference_text: str,
-                       language_code: str):
-    with open(audio_path, "rb") as f:
-        args = {
-            "model": "whisper-1",
-            "file": f,
-            "response_format": "verbose_json",
-            "prompt": reference_text.strip(),
-        }
-        if language_code in WHISPER_LANGUAGES:
-            args["language"] = language_code
-        resp = client.audio.transcriptions.create(**args)
-    return resp.text, resp.duration
+def clean_json(raw: str) -> str:
+    raw = raw.strip()
+    raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+    raw = re.sub(r'\n?```$', '', raw)
+    return raw.strip()
 
 
-def evaluate_with_diff(reference_text: str, user_text: str,
-                       language_code: str, wpm: float) -> dict:
-    ref_clean  = normalize_text(reference_text)
-    user_clean = normalize_text(user_text)
-    ref_words  = ref_clean.split()
-    user_words = user_clean.split()
+def detect_image_mime(image_bytes: bytes) -> str:
+    if image_bytes[:4] == b'\x89PNG':
+        return 'image/png'
+    if image_bytes[:2] == b'\xff\xd8':
+        return 'image/jpeg'
+    return 'image/png'
 
-    matcher       = difflib.SequenceMatcher(None, ref_words, user_words)
-    missing_words = []
-    extra_words   = []
 
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == 'delete':
-            missing_words.extend(ref_words[i1:i2])
-        elif tag == 'insert':
-            extra_words.extend(user_words[j1:j2])
-        elif tag == 'replace':
-            lev = Levenshtein.ratio(
-                "".join(ref_words[i1:i2]),
-                "".join(user_words[j1:j2])
+def gemini_generate_with_retry(model, contents, generation_config):
+    """
+    Call model.generate_content() with automatic retry on 429/503.
+    Waits RETRY_DELAYS[attempt] seconds before each retry.
+    Raises the last exception if all retries are exhausted.
+    """
+    last_exc = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            return model.generate_content(
+                contents=contents,
+                generation_config=generation_config,
             )
-            if lev < 0.70:
-                missing_words.extend(ref_words[i1:i2])
-                extra_words.extend(user_words[j1:j2])
-
-    total_ref   = len(ref_words)
-    missed      = len(missing_words)
-    extra       = len(extra_words)
-    coverage    = ((total_ref - missed) / total_ref * 100) if total_ref > 0 else 0
-    noise_pen   = min(extra * 3, 30)
-    pron_score  = Levenshtein.ratio(ref_clean, user_clean) * 100
-    final_score = round(max((coverage * 0.6) + (pron_score * 0.4) - noise_pen, 0), 2)
-
-    wpm_min = WPM_THRESHOLD.get(language_code, DEFAULT_WPM_THRESHOLD)
-    return {
-        "score": final_score,
-        "wpm": wpm,
-        "status": "Pass" if final_score >= 75 and wpm >= wpm_min else "Fail",
-        "user_transcription": user_text,
-        "feedback": "",
-        "metrics": {
-            "missed_words_list": missing_words,
-            "extra_words_list":  extra_words,
-        },
-    }
+        except (ResourceExhausted, ServiceUnavailable) as e:
+            last_exc = e
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_DELAYS[attempt]
+                print(f"[Gemini] Rate limit hit (attempt {attempt+1}), "
+                      f"retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+        except Exception:
+            raise   # non-retryable errors bubble up immediately
+    raise last_exc
 
 
 # ─────────────────────────────────────────────────────────────────────
-# PATH B: Malayalam / Telugu — GPT-4o Audio (single call)
+# READING — Gemini 2.0 Flash Audio
 # ─────────────────────────────────────────────────────────────────────
 
-def evaluate_with_gpt_audio(audio_path: str, reference_text: str,
+def evaluate_reading_gemini(audio_path: str, reference_text: str,
                              language_code: str) -> dict:
-    """
-    Convert audio to mp3 → send to GPT-4o Audio with reference text.
-    GPT-4o Audio natively understands ML/TE speech, transcribes accurately,
-    and scores holistically — no Whisper phonetic drift, no hallucinations.
-    """
     lang_name      = LANG_NAMES.get(language_code, language_code.upper())
     ref_word_count = len(reference_text.split())
+    duration       = get_audio_duration(audio_path)
 
-    # Get duration BEFORE conversion (original file)
-    duration = get_audio_duration(audio_path)
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
 
-    # Convert webm/ogg → mp3  (GPT-4o Audio only accepts wav or mp3)
-    mp3_path = None
-    try:
-        mp3_path    = convert_to_mp3(audio_path)
-        read_path   = mp3_path
-        audio_fmt   = "mp3"
-    except Exception as conv_err:
-        # If ffmpeg fails, try sending original (works if already mp3/wav)
-        read_path = audio_path
-        ext = os.path.splitext(audio_path)[1].lower().lstrip('.')
-        audio_fmt = ext if ext in ('wav', 'mp3') else 'mp3'
+    ext = os.path.splitext(audio_path)[1].lower()
+    mime_map = {
+        '.webm': 'audio/webm', '.mp4': 'audio/mp4',
+        '.mp3':  'audio/mpeg', '.wav': 'audio/wav',
+        '.ogg':  'audio/ogg',  '.m4a': 'audio/mp4',
+        '.flac': 'audio/flac',
+    }
+    mime_type = mime_map.get(ext, 'audio/webm')
 
-    with open(read_path, "rb") as f:
-        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+    prompt = f"""You are a strict {lang_name} language examiner for the RBI Language Proficiency Test.
 
-    # Clean up temp mp3 after reading
-    if mp3_path and os.path.exists(mp3_path):
-        try:
-            os.remove(mp3_path)
-        except Exception:
-            pass
-
-    prompt = f"""You are a senior {lang_name} language examiner for the RBI Language Proficiency Test.
-
-Listen carefully to the audio. The candidate is reading this passage aloud:
+The candidate must read this COMPLETE passage aloud:
 
 REFERENCE PASSAGE ({ref_word_count} words):
 {reference_text}
 
-TASKS:
-1. TRANSCRIBE exactly what you hear in {lang_name} script.
-2. SCORE the reading 0-100 based on word coverage and fluency.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — TRANSCRIBE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Write exactly what you hear in {lang_name} script. Nothing more, nothing less.
 
-SCORING GUIDE:
-- 95-100: All words read, excellent fluency
-- 85-94 : Nearly complete, very minor issues
-- 75-84 : Most words read, 1-2 skips
-- 60-74 : Several skips or stumbles
-- <60   : Large portions missed
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — COUNT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- words_spoken   = how many words from the reference were actually spoken
+- missed_words   = reference words NOT spoken (stopping early = ALL remaining words missed)
+- extra_words    = words spoken NOT in the reference (filler, repetitions, wrong words)
 
-Return ONLY this JSON (no markdown):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — CALCULATE SCORE (strictly)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+base  = (words_spoken / {ref_word_count}) * 100
+deduct 2 points for each extra/wrong word spoken
+deduct 1 point for each clear stumble or re-read
+score = max(0, min(100, base - extra_penalty - fluency_penalty))
+
+EXAMPLES (so you understand the strictness required):
+- Read 1 sentence of 3 → words_spoken ≈ 33% → score ≈ 30-35
+- Read 2 sentences of 3 → words_spoken ≈ 66% → score ≈ 60-65
+- Read all 3 sentences, no errors → score = 95-100
+- Read all 3 sentences, 3 wrong words → score ≈ 88-92
+- Read all 3 sentences, 3 wrong + 3 stumbles → score ≈ 83-87
+
+DO NOT be generous. DO NOT assume unread words were read.
+If the transcription ends mid-passage, those words are MISSED.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Return ONLY valid JSON, no markdown:
 {{
-  "transcription": "<what you heard in {lang_name} script>",
-  "score": <integer 0-100>,
-  "word_count_heard": <integer>,
-  "feedback": "<one constructive sentence in English>",
-  "missed_words": []
+  "transcription": "<exactly what you heard in {lang_name} script>",
+  "score": <integer 0-100, calculated strictly per formula above>,
+  "words_spoken": <integer — count of reference words actually spoken>,
+  "missed_words": <list of reference words NOT spoken>,
+  "extra_words": <list of wrong/extra words spoken that are NOT in reference>,
+  "feedback": "<one honest sentence: exactly what was completed and what was missed>"
 }}"""
 
-    response = client.chat.completions.create(
-        model="gpt-4o-audio-preview",
-        modalities=["text"],
-        messages=[{
+    model    = genai.GenerativeModel(GEMINI_FLASH)
+    response = gemini_generate_with_retry(
+        model,
+        contents=[{
             "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {
-                    "type": "input_audio",
-                    "input_audio": {
-                        "data": audio_b64,
-                        "format": audio_fmt,
-                    }
-                },
-            ],
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(audio_bytes).decode()
+                }},
+            ]
         }],
-        max_tokens=600,
-        temperature=0,
+        generation_config=genai.GenerationConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
     )
 
-    raw = response.choices[0].message.content
-    raw = re.sub(r'^```[a-z]*\n?', '', raw.strip())
-    raw = re.sub(r'\n?```$', '', raw.strip())
-    result = json.loads(raw)
-
+    result      = json.loads(clean_json(response.text))
     score       = float(result.get("score", 0))
     user_text   = result.get("transcription", "")
-    words_heard = int(result.get("word_count_heard", len(user_text.split())))
-    wpm         = round((words_heard / duration) * 60, 1) if duration > 0 else 0
-
-    wpm_min = WPM_THRESHOLD.get(language_code, DEFAULT_WPM_THRESHOLD)
-    status  = "Pass" if score >= 75 and wpm >= wpm_min else "Fail"
+    words_spoken = int(result.get("words_spoken", len(user_text.split())))
+    wpm         = round((words_spoken / duration) * 60, 1) if duration > 0 else 0
+    wpm_min     = WPM_THRESHOLD.get(language_code, DEFAULT_WPM_THRESHOLD)
 
     return {
         "score": round(score, 2),
         "wpm": wpm,
-        "status": status,
+        "status": "Pass" if score >= 75 and wpm >= wpm_min else "Fail",
         "user_transcription": user_text,
         "feedback": result.get("feedback", ""),
         "metrics": {
             "missed_words_list": result.get("missed_words", []),
-            "extra_words_list":  [],
+            "extra_words_list":  result.get("extra_words", []),
         },
     }
 
 
-# ─────────────────────────────────────────────────────────────────────
-# MAIN ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────
-
 def calculate_reading_score(reference_text: str, audio_path: str,
                              language_code: str) -> dict:
     try:
-        if language_code in GPT_AUDIO_LANGUAGES:
-            return evaluate_with_gpt_audio(audio_path, reference_text, language_code)
-        else:
-            user_text, duration = transcribe_whisper(audio_path, reference_text, language_code)
-            wpm = round((len(user_text.split()) / duration) * 60, 1) if duration > 0 else 0
-            return evaluate_with_diff(reference_text, user_text, language_code, wpm)
+        return evaluate_reading_gemini(audio_path, reference_text, language_code)
     except Exception as e:
         return {"error": str(e)}
 
 
 # ─────────────────────────────────────────────────────────────────────
-# HANDWRITING ANALYSIS
+# WRITING — Gemini 2.0 Flash Vision (topic-aware)
 # ─────────────────────────────────────────────────────────────────────
 
 def analyze_handwriting(image_bytes: bytes, language_code: str,
                         expected_topics_list=None) -> dict:
     try:
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
-        lang_name    = LANG_NAMES.get(language_code, language_code.upper())
+        lang_name = LANG_NAMES.get(language_code, language_code.upper())
 
-        prompt = f"""You are an expert {lang_name} language examiner for the RBI LPT.
-Analyze this handwritten answer sheet image.
+        if expected_topics_list:
+            topics_block = "\n".join(
+                f"  {i+1}. {t}" for i, t in enumerate(expected_topics_list)
+            )
+            topic_section = f"""
+AVAILABLE TOPICS (candidate chose ONE to write about):
+{topics_block}
 
-1. Transcribe the text exactly as written.
-2. Identify spelling and grammatical errors with corrections.
-3. Rate handwriting legibility (0-10).
-4. Give an overall score out of 10.
-5. Write brief constructive feedback.
+Identify which topic was written, then evaluate content relevance to THAT specific topic."""
+        else:
+            topic_section = "\nIdentify the topic the candidate wrote about."
 
-Return ONLY a valid JSON object with keys:
-'transcription', 'errors' (list of strings), 'legibility_score', 'final_score', 'feedback'."""
+        prompt = f"""You are a strict but fair {lang_name} language examiner for the RBI Language Proficiency Test (LPT).
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{
+Carefully examine this handwritten answer sheet image.
+{topic_section}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVALUATION STEPS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A. TRANSCRIPTION
+   Read every word and transcribe the COMPLETE handwritten text
+   exactly as written in {lang_name} script. Do NOT correct anything.
+
+B. SPELLING ERRORS
+   Check every word against standard {lang_name} spelling.
+   List each as: "misspelled → correct"
+   If no errors, return empty list.
+
+C. GRAMMAR ERRORS
+   List each grammatical mistake in English (wrong verb form,
+   wrong case, word order, missing words, etc.)
+   If no errors, return empty list.
+
+D. SCORES (each out of 10):
+
+   legibility_score: How clearly is the handwriting written?
+     10 = perfectly clear, 1 = barely readable
+
+   content_score: Is the content relevant and substantial?
+     10 = fully on-topic, rich ideas, 5+ sentences
+     5  = somewhat related, thin content
+     1  = off-topic or only 1-2 sentences
+
+   language_score: Vocabulary, sentence variety, fluency
+     10 = varied vocab, complex sentences, natural flow
+     5  = basic vocab, simple sentences only
+     1  = very limited language
+
+   final_score: Weighted average
+     = (content_score × 0.35) + (language_score × 0.30)
+     + ((10 - spelling_errors_count × 0.5) × 0.20)
+     + ((10 - grammar_errors_count × 0.5) × 0.15)
+     Minimum 1, Maximum 10. Round to 1 decimal.
+
+E. FEEDBACK
+   Write 3-4 sentences of SPECIFIC, ACTIONABLE feedback in English.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Return ONLY valid JSON, no markdown:
+{{
+  "topic_identified": "<exact topic name written about>",
+  "transcription": "<complete text exactly as written>",
+  "spelling_errors": ["misspelled → correct", ...],
+  "grammar_errors": ["description of error", ...],
+  "legibility_score": <integer 0-10>,
+  "content_score": <number 0-10>,
+  "language_score": <number 0-10>,
+  "final_score": <number 0-10>,
+  "feedback": "<3-4 sentences of specific feedback in English>"
+}}"""
+
+        model     = genai.GenerativeModel(GEMINI_FLASH)
+        mime_type = detect_image_mime(image_bytes)
+
+        response = gemini_generate_with_retry(
+            model,
+            contents=[{
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{base64_image}"
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(image_bytes).decode()
                     }},
-                ],
+                ]
             }],
-            response_format={"type": "json_object"},
-            max_tokens=1000,
-            temperature=0,
+            generation_config=genai.GenerationConfig(
+                temperature=0,
+                response_mime_type="application/json",
+            ),
         )
-        return json.loads(response.choices[0].message.content)
+
+        return json.loads(clean_json(response.text))
+
     except Exception as e:
         return {"error": str(e)}
