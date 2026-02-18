@@ -8,7 +8,7 @@ import base64
 import subprocess
 import Levenshtein
 import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable
+from google.api_core.exceptions import ResourceExhausted, ServiceUnavailable, DeadlineExceeded
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,11 +22,11 @@ LANG_NAMES = {
 
 WPM_THRESHOLD         = {'hi': 40, 'ml': 20, 'te': 20, 'ta': 20, 'kn': 20}
 DEFAULT_WPM_THRESHOLD = 22
-GEMINI_FLASH          = "gemini-2.0-flash"
+GEMINI_FLASH          = "gemini-2.0-flash-001"
 
-# Retry settings for 429 / 503 transient errors
-MAX_RETRIES  = 4
-RETRY_DELAYS = [2, 5, 10, 20]   # seconds between retries (exponential-ish)
+# Retry settings — increased delays and attempts for reliability
+MAX_RETRIES  = 5
+RETRY_DELAYS = [3, 6, 12, 20, 30]   # total max wait: 71 seconds
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -77,9 +77,8 @@ def detect_image_mime(image_bytes: bytes) -> str:
 
 def gemini_generate_with_retry(model, contents, generation_config):
     """
-    Call model.generate_content() with automatic retry on 429/503.
-    Waits RETRY_DELAYS[attempt] seconds before each retry.
-    Raises the last exception if all retries are exhausted.
+    Call Gemini with automatic retry on transient errors (429, 503, timeout).
+    Increased delays and attempts for better reliability under load.
     """
     last_exc = None
     for attempt in range(MAX_RETRIES):
@@ -88,18 +87,52 @@ def gemini_generate_with_retry(model, contents, generation_config):
                 contents=contents,
                 generation_config=generation_config,
             )
-        except (ResourceExhausted, ServiceUnavailable) as e:
+        except (ResourceExhausted, ServiceUnavailable, DeadlineExceeded) as e:
             last_exc = e
             if attempt < MAX_RETRIES - 1:
                 wait = RETRY_DELAYS[attempt]
-                print(f"[Gemini] Rate limit hit (attempt {attempt+1}), "
-                      f"retrying in {wait}s...")
+                print(f"[Gemini] Transient error (attempt {attempt+1}/{MAX_RETRIES}), "
+                      f"retrying in {wait}s... ({type(e).__name__})")
                 time.sleep(wait)
             else:
+                print(f"[Gemini] All {MAX_RETRIES} retries exhausted")
                 raise
-        except Exception:
-            raise   # non-retryable errors bubble up immediately
+        except Exception as e:
+            # Non-retryable errors (invalid API key, malformed request, etc.)
+            print(f"[Gemini] Non-retryable error: {type(e).__name__}")
+            raise
     raise last_exc
+
+
+def detect_script(text: str) -> str:
+    """
+    Detect which script the text is written in based on Unicode ranges.
+    Returns language code or 'unknown'.
+    """
+    if not text or len(text.strip()) < 3:
+        return 'unknown'
+    
+    # Count characters in each script
+    devanagari = sum(1 for c in text if '\u0900' <= c <= '\u097F')  # Hindi
+    telugu     = sum(1 for c in text if '\u0C00' <= c <= '\u0C7F')  # Telugu
+    malayalam  = sum(1 for c in text if '\u0D00' <= c <= '\u0D7F')  # Malayalam
+    tamil      = sum(1 for c in text if '\u0B80' <= c <= '\u0BFF')  # Tamil
+    kannada    = sum(1 for c in text if '\u0C80' <= c <= '\u0CFF')  # Kannada
+    bengali    = sum(1 for c in text if '\u0980' <= c <= '\u09FF')  # Bengali
+    
+    total_indic = devanagari + telugu + malayalam + tamil + kannada + bengali
+    
+    # If less than 50% of text is Indic script, likely English or mixed
+    if total_indic < len(text) * 0.5:
+        return 'en'
+    
+    # Return the dominant script
+    scripts = {
+        'hi': devanagari, 'te': telugu, 'ml': malayalam,
+        'ta': tamil,      'kn': kannada, 'bn': bengali,
+    }
+    detected = max(scripts.items(), key=lambda x: x[1])
+    return detected[0] if detected[1] > 0 else 'unknown'
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -220,7 +253,7 @@ def calculate_reading_score(reference_text: str, audio_path: str,
 
 
 # ─────────────────────────────────────────────────────────────────────
-# WRITING — Gemini 2.0 Flash Vision (topic-aware)
+# WRITING — Gemini 2.0 Flash Vision (topic-aware + script validation)
 # ─────────────────────────────────────────────────────────────────────
 
 def analyze_handwriting(image_bytes: bytes, language_code: str,
@@ -246,7 +279,23 @@ Carefully examine this handwritten answer sheet image.
 {topic_section}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EVALUATION STEPS:
+CRITICAL — LANGUAGE VALIDATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The answer MUST be written in {lang_name} script.
+If the text is written in a DIFFERENT language/script (e.g. Telugu when Hindi was selected),
+you MUST return a special error response:
+
+{{
+  "error": "Language mismatch detected",
+  "detected_language": "<what language/script you see>",
+  "expected_language": "{lang_name}",
+  "message": "The answer is written in <detected> but the test requires {lang_name}. Please write in the correct language."
+}}
+
+Only proceed with evaluation if the text is in {lang_name} script.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVALUATION STEPS (if language is correct):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 A. TRANSCRIPTION
@@ -322,7 +371,25 @@ Return ONLY valid JSON, no markdown:
             ),
         )
 
-        return json.loads(clean_json(response.text))
+        result = json.loads(clean_json(response.text))
+        
+        # Check if Gemini detected a language mismatch
+        if "error" in result and result.get("error") == "Language mismatch detected":
+            return result
+        
+        # Also check transcription script as a backup validation
+        transcription = result.get("transcription", "")
+        if transcription:
+            detected = detect_script(transcription)
+            if detected != 'unknown' and detected != language_code and detected != 'en':
+                return {
+                    "error": "Language mismatch detected",
+                    "detected_language": LANG_NAMES.get(detected, detected.upper()),
+                    "expected_language": lang_name,
+                    "message": f"The answer appears to be written in {LANG_NAMES.get(detected, detected.upper())} but the test requires {lang_name}. Please write in the correct language."
+                }
+        
+        return result
 
     except Exception as e:
         return {"error": str(e)}
